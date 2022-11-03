@@ -1,2 +1,2 @@
 # MatMul_tiling
-Matrix multiplication using tiling without using a shared memory in Cuda
+Matrix multiplication using tiling without a shared memory in Cuda

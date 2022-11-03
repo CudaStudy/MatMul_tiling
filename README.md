@@ -1,2 +1,2 @@
 # MatMul_tiling
-Matrix multiplication with tiling in Cuda
+Matrix multiplication using tiling in Cuda

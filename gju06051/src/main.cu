@@ -12,8 +12,8 @@
 
 // Matrix Spec
 #define ROW_SIZE 1024
-#define K_SIZE 512
-#define COL_SIZE 512
+#define K_SIZE 1024
+#define COL_SIZE 2048
 #define WORK_LOAD (ROW_SIZE * COL_SIZE)
 
 #define MAT_SIZE_A (ROW_SIZE * K_SIZE)
@@ -126,9 +126,9 @@ int main(void)
 
 #ifdef MAT_MUL_SH
     // host input matrix
-    float A[ROW_SIZE][K_SIZE];       // m * k
-    float B[K_SIZE][COL_SIZE];       // k * n
-    float hostC[ROW_SIZE][COL_SIZE]; // host result
+    float *A = new float[ROW_SIZE][K_SIZE];       // m * k
+    float *B = new float[K_SIZE][COL_SIZE];       // k * n
+    float *hostC = new float[ROW_SIZE][COL_SIZE]; // host result
 
     memset(A, 0, sizeof(float) * MAT_SIZE_A);
     memset(B, 0, sizeof(float) * MAT_SIZE_B);
@@ -170,9 +170,9 @@ int main(void)
 
 #ifdef MAT_MUL_NSH
     // host input matrix
-    float A[MAT_SIZE_A];
-    float B[MAT_SIZE_B];
-    float hostC[MAT_SIZE_C]; // host result
+    float *A = new float[MAT_SIZE_A];
+    float *B = new float[MAT_SIZE_B];
+    float *hostC = new float[MAT_SIZE_C]; // host result
 
     memset(A, 0, sizeof(float) * MAT_SIZE_A);
     memset(B, 0, sizeof(float) * MAT_SIZE_B);
@@ -205,7 +205,7 @@ int main(void)
     timer_cpu.offTimer(CPU);
 
     // device result
-    float nsh_deviceC[MAT_SIZE_C];
+    float *nsh_deviceC = new float[MAT_SIZE_C];
     memset(nsh_deviceC, 0, sizeof(float) * MAT_SIZE_C);
 
     // device I/O matrix
@@ -224,7 +224,6 @@ int main(void)
 
     // check the results
     bool isCorrect = true;
-
     printf("--------------------CPU MULTIPLICATION BOT--------------------\n");
 
 #ifdef MAT_MUL_SH

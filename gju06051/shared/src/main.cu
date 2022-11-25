@@ -8,12 +8,12 @@
 #include <string.h>
 
 #define MAT_MUL_NSH
-// #define MAT_MUL_SH
+#define MAT_MUL_SH
 
 // Matrix Spec
 #define ROW_SIZE 1024
-#define K_SIZE 512
-#define COL_SIZE 512
+#define K_SIZE 1024
+#define COL_SIZE 2048
 #define WORK_LOAD (ROW_SIZE * COL_SIZE)
 
 #define MAT_SIZE_A (ROW_SIZE * K_SIZE)
@@ -42,46 +42,47 @@
 #endif
 
 #ifdef MAT_MUL_SH
-__global__ void matMul_kernel_shared(float *_A, float *_B, float *_C)
+__global__ void matMul_kernel_shared(float *_A, float *_B, float *_C, int _m, int _n, int _k)
 {
-    int row = threadIdx.y;
-    int col = threadIdx.x;
-    int index = row * blockDim.x + col;
+    int row = blockDim.x * blockIdx.x + threadIdx.x;
+    int col = blockDim.y * blockIdx.y + threadIdx.y;
 
-    __shared__ float sA[ROW_SIZE][K_SIZE]; // 32 * 256 * 4 bytes = 16 KB
-    __shared__ float sB[K_SIZE][COL_SIZE]; // 16 KB
+    if (row >= _m || col >= _n)
+        return;
 
-    int offset = 0;
+    __shared__ float sA[BLOCK_SIZE][BLOCK_SIZE]; // 16 * 16 * 8B = 2048B
+    __shared__ float sB[BLOCK_SIZE][BLOCK_SIZE]; // 16 * 16 * 8B = 2048B
 
-    // load A
-    int numSubMatA = ceil((float)K_SIZE / COL_SIZE);
-    for (int i = 0; i < numSubMatA; i++)
+    int row_offset = threadIdx.y;
+    int col_offset = threadIdx.x;
+
+    for (int i = 0; i < ceil((float)_k / BLOCK_SIZE); i++)
     {
-        if (col + offset >= K_SIZE)
-            break;
+        int block_offset = i * BLOCK_SIZE;
 
-        sA[row][col + offset] = _A[row * K_SIZE + (col + offset)];
-        offset += COL_SIZE;
+        if (row >= _m || block_offset + col_offset >= _k)
+            continue;
+        else
+            sA[row_offset][col_offset] = _A[ID2INDEX(row, block_offset + col_offset, _k)];
+
+        if (col >= _m || block_offset + row_offset >= _k)
+            continue;
+        else
+            sB[row_offset][col_offset] = _B[ID2INDEX(block_offset + row_offset, col, _n)];
     }
+    __syncthreads(); // wait until all thread load the matrix
 
-    // load B
-    offset = 0;
-    int numSubMatB = ceil((float)K_SIZE / ROW_SIZE);
-    for (int i = 0; i < numSubMatB; i++)
+    // matrix multiplication
+    int val = 0;
+
+    for (int i = 0; i < BLOCK_SIZE; i++)
     {
-        if (row + offset >= K_SIZE)
-            break;
-
-        sB[row + offset][col] = _B[col + (row + offset) * COL_SIZE];
-        offset += ROW_SIZE;
+        val += __fmul_rn(sA[row_offset][i], sB[col_offset][i]);
     }
 
     __syncthreads(); // wait until all thread load the matrix
 
-    _C[index] = 0;
-    for (int k = 0; k < K_SIZE; k++)
-        for (int i = 0; i < WORK_LOAD; i++)
-            _C[index] += sA[row][k] * sB[k][col];
+    _C[ID2INDEX(row, col, _n)] = val;
 }
 #endif
 
@@ -124,55 +125,10 @@ int main(void)
 
     printf("Step1: Size : A = (%d x %d), B = (%d x %d), C = (%d x %d)\n", ROW_SIZE, K_SIZE, K_SIZE, COL_SIZE, ROW_SIZE, COL_SIZE);
 
-#ifdef MAT_MUL_SH
     // host input matrix
-    float A[ROW_SIZE][K_SIZE];       // m * k
-    float B[K_SIZE][COL_SIZE];       // k * n
-    float hostC[ROW_SIZE][COL_SIZE]; // host result
-
-    memset(A, 0, sizeof(float) * MAT_SIZE_A);
-    memset(B, 0, sizeof(float) * MAT_SIZE_B);
-    memset(hostC, 0, sizeof(float) * MAT_SIZE_C);
-
-    // generate input matrices
-    for (int r = 0; r < ROW_SIZE; r++)
-        for (int k = 0; k < K_SIZE; k++)
-            A[r][k] = ((rand() % 10) + ((rand() % 100) / 100.0));
-
-    for (int k = 0; k < K_SIZE; k++)
-        for (int c = 0; c < COL_SIZE; c++)
-            B[k][c] = ((rand() % 10) + ((rand() % 100) / 100.0));
-
-    // Host code
-    printf("Step2: CPU Matrix Multiplication\n");
-    timer_sh.onTimer(CPU);
-    for (int r = 0; r < ROW_SIZE; r++)
-        for (int c = 0; c < COL_SIZE; c++)
-            for (int k = 0; k < K_SIZE; k++)
-                for (int i = 0; i < WORK_LOAD; i++)
-                    hostC[r][c] += A[r][k] * B[k][c];
-    timer_sh.offTimer(CPU);
-
-    // device result
-    float deviceC[ROW_SIZE][COL_SIZE];
-    memset(deviceC, 0, sizeof(float) * MAT_SIZE_C);
-
-    // device I/O matrix
-    float *dA, *dB, *dC;
-    dA = dB = dC = NULL;
-
-    // device memory allocaiton
-    cudaMalloc(&dA, sizeof(float) * MAT_SIZE_A);
-    cudaMalloc(&dB, sizeof(float) * MAT_SIZE_B);
-    cudaMalloc(&dC, sizeof(float) * MAT_SIZE_C);
-
-#endif
-
-#ifdef MAT_MUL_NSH
-    // host input matrix
-    float A[MAT_SIZE_A];
-    float B[MAT_SIZE_B];
-    float hostC[MAT_SIZE_C]; // host result
+    float *A = new float[MAT_SIZE_A];
+    float *B = new float[MAT_SIZE_B];
+    float *hostC = new float[MAT_SIZE_C]; // host result
 
     memset(A, 0, sizeof(float) * MAT_SIZE_A);
     memset(B, 0, sizeof(float) * MAT_SIZE_B);
@@ -204,30 +160,28 @@ int main(void)
     }
     timer_cpu.offTimer(CPU);
 
-    // device result
-    float nsh_deviceC[MAT_SIZE_C];
-    memset(nsh_deviceC, 0, sizeof(float) * MAT_SIZE_C);
-
-    // device I/O matrix
-    float *nsh_dA, *nsh_dB, *nsh_dC;
-    nsh_dA = nsh_dB = nsh_dC = NULL;
-
-    // device memory allocation
-    cudaMalloc(&nsh_dA, sizeof(float) * MAT_SIZE_A);
-    cudaMalloc(&nsh_dB, sizeof(float) * MAT_SIZE_B);
-    cudaMalloc(&nsh_dC, sizeof(float) * MAT_SIZE_C);
-
-#endif
-
     printf("--------------------CPU MULTIPLICATION TOP--------------------\n");
     timer_cpu.printTimer();
 
     // check the results
     bool isCorrect = true;
-
     printf("--------------------CPU MULTIPLICATION BOT--------------------\n");
 
 #ifdef MAT_MUL_SH
+
+    // device result
+    float *deviceC = new float[MAT_SIZE_C];
+    memset(deviceC, 0, sizeof(float) * MAT_SIZE_C);
+
+    // device I/O matrix
+    float *dA, *dB, *dC;
+    dA = dB = dC = NULL;
+
+    // device memory allocaiton
+    cudaMalloc(&dA, sizeof(float) * MAT_SIZE_A);
+    cudaMalloc(&dB, sizeof(float) * MAT_SIZE_B);
+    cudaMalloc(&dC, sizeof(float) * MAT_SIZE_C);
+
     // Copy input matrices : H -> D
     printf("Step3: CPU -> GPU \n");
     timer_sh.onTimer(CPU2GPU);
@@ -238,10 +192,11 @@ int main(void)
     //// Kernel call (shared memory)
     printf("Step4: GPU Matrix Mulatiplication\n");
 
-    dim3 gridDim_sh(1);
-    dim3 blockDim_sh(ROW_SIZE, COL_SIZE);
+    dim3 gridDim_sh(ceil((float)ROW_SIZE / BLOCK_SIZE), ceil((float)COL_SIZE / BLOCK_SIZE));
+    dim3 blockDim_sh(BLOCK_SIZE, BLOCK_SIZE);
+
     timer_sh.onTimer(GPU);
-    matMul_kernel_shared<<<gridDim_sh, blockDim_sh>>>(dA, dB, dC);
+    matMul_kernel_shared<<<gridDim_sh, blockDim_sh>>>(dA, dB, dC, ROW_SIZE, COL_SIZE, K_SIZE);
     cudaDeviceSynchronize();
     timer_sh.offTimer(GPU);
 
@@ -251,8 +206,8 @@ int main(void)
     cudaMemcpy(deviceC, dC, sizeof(float) * MAT_SIZE_C, cudaMemcpyDeviceToHost);
     timer_sh.offTimer(GPU2CPU);
 
-    float *pHostC = &hostC[0][0];
-    float *pDeviceC = &deviceC[0][0];
+    float *pHostC = &hostC[0];
+    float *pDeviceC = &deviceC[0];
 
     for (int i = 0; i < MAT_SIZE_C; i++)
     {
@@ -275,17 +230,30 @@ int main(void)
 
 #endif
 
+    // check the results
+    isCorrect = true;
+
 #ifdef MAT_MUL_NSH
+
+    // device result
+    float *nsh_deviceC = new float[MAT_SIZE_C];
+    memset(nsh_deviceC, 0, sizeof(float) * MAT_SIZE_C);
+
+    // device I/O matrix
+    float *nsh_dA, *nsh_dB, *nsh_dC;
+    nsh_dA = nsh_dB = nsh_dC = NULL;
+
+    // device memory allocation
+    cudaMalloc(&nsh_dA, sizeof(float) * MAT_SIZE_A);
+    cudaMalloc(&nsh_dB, sizeof(float) * MAT_SIZE_B);
+    cudaMalloc(&nsh_dC, sizeof(float) * MAT_SIZE_C);
+
     timer_nsh.onTimer(NSH_CPU2GPU);
     cudaMemcpy(nsh_dA, A, sizeof(float) * MAT_SIZE_A, cudaMemcpyHostToDevice);
     cudaMemcpy(nsh_dB, B, sizeof(float) * MAT_SIZE_B, cudaMemcpyHostToDevice);
     timer_nsh.offTimer(NSH_CPU2GPU);
 
-    int m = ROW_SIZE;
-    int n = COL_SIZE;
-    int k = K_SIZE;
-
-    dim3 gridDim_nsh(ceil((float)m / BLOCK_SIZE), ceil((float)n / BLOCK_SIZE));
+    dim3 gridDim_nsh(ceil((float)ROW_SIZE / BLOCK_SIZE), ceil((float)COL_SIZE / BLOCK_SIZE));
     dim3 blockDim_nsh(BLOCK_SIZE, BLOCK_SIZE);
     printf("Step6: not_shared gpu multiplication start!\n");
     printf("Size : A = (%d x %d), B = (%d x %d), C = (%d x %d)\n", ROW_SIZE, K_SIZE, K_SIZE, COL_SIZE, ROW_SIZE, COL_SIZE);
@@ -293,7 +261,7 @@ int main(void)
 
     //// Kernel call (not shared memory)
     timer_nsh.onTimer(NSH_GPU);
-    matMul_kernel<<<gridDim_nsh, blockDim_nsh>>>(nsh_dA, nsh_dB, nsh_dC, m, n, k);
+    matMul_kernel<<<gridDim_nsh, blockDim_nsh>>>(nsh_dA, nsh_dB, nsh_dC, ROW_SIZE, COL_SIZE, K_SIZE);
     cudaDeviceSynchronize();
     timer_nsh.offTimer(NSH_GPU);
 

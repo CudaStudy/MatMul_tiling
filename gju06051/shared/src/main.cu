@@ -50,23 +50,23 @@ __global__ void matMul_kernel_shared(float *_A, float *_B, float *_C, int _m, in
     if (row >= _m || col >= _n)
         return;
 
+    int row_offset = threadIdx.x;
+    int col_offset = threadIdx.y;
+
     __shared__ float sA[BLOCK_SIZE][BLOCK_SIZE]; // 16 * 16 * 8B = 2048B
     __shared__ float sB[BLOCK_SIZE][BLOCK_SIZE]; // 16 * 16 * 8B = 2048B
-
-    int row_offset = threadIdx.y;
-    int col_offset = threadIdx.x;
 
     for (int i = 0; i < ceil((float)_k / BLOCK_SIZE); i++)
     {
         int block_offset = i * BLOCK_SIZE;
 
         if (row >= _m || block_offset + col_offset >= _k)
-            continue;
+            sA[row_offset][col_offset] = 0;
         else
             sA[row_offset][col_offset] = _A[ID2INDEX(row, block_offset + col_offset, _k)];
 
         if (col >= _m || block_offset + row_offset >= _k)
-            continue;
+            sB[row_offset][col_offset] = 0;
         else
             sB[row_offset][col_offset] = _B[ID2INDEX(block_offset + row_offset, col, _n)];
     }
@@ -190,10 +190,12 @@ int main(void)
     timer_sh.offTimer(CPU2GPU);
 
     //// Kernel call (shared memory)
-    printf("Step4: GPU Matrix Mulatiplication\n");
-
     dim3 gridDim_sh(ceil((float)ROW_SIZE / BLOCK_SIZE), ceil((float)COL_SIZE / BLOCK_SIZE));
     dim3 blockDim_sh(BLOCK_SIZE, BLOCK_SIZE);
+
+    printf("Step4: GPU Matrix Mulatiplication\n");
+    printf("Size : A = (%d x %d), B = (%d x %d), C = (%d x %d)\n", ROW_SIZE, K_SIZE, K_SIZE, COL_SIZE, ROW_SIZE, COL_SIZE);
+    printf("Dim  : Grid = (%d, %d), BLock = (%d x %d)\n", gridDim_sh.x, gridDim_sh.y, blockDim_sh.x, blockDim_sh.y);
 
     timer_sh.onTimer(GPU);
     matMul_kernel_shared<<<gridDim_sh, blockDim_sh>>>(dA, dB, dC, ROW_SIZE, COL_SIZE, K_SIZE);

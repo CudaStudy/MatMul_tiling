@@ -7,13 +7,14 @@
 #include <stdlib.h>
 #include <string.h>
 
+// #define CPU_ON
 #define MAT_MUL_NSH
 // #define MAT_MUL_SH
 
 // Matrix Spec
-#define ROW_SIZE 1024
-#define K_SIZE 1024
-#define COL_SIZE 2048
+#define ROW_SIZE (4096 * 4)
+#define K_SIZE (4096 * 4)
+#define COL_SIZE (4096 * 4)
 #define WORK_LOAD (ROW_SIZE * COL_SIZE)
 
 #define MAT_SIZE_A (ROW_SIZE * K_SIZE)
@@ -105,8 +106,10 @@ __global__ void matMul_kernel(float *_matA, float *_matB, float *_matC, int _m, 
 
 int main(void)
 {
+#ifdef CPU_ON
     DS_timer timer_cpu(1);
     timer_cpu.setTimerName(CPU, (char *)"[CPU]");
+#endif
 
 #ifdef MAT_MUL_SH
     DS_timer timer_sh(3);
@@ -188,6 +191,7 @@ int main(void)
         B[i] = ((rand() % 10) + ((rand() % 100) / 100.0));
     }
 
+#ifdef CPU_ON
     printf("Step2: CPU Matrix Multiplication\n");
     timer_cpu.onTimer(CPU);
     for (int row = 0; row < ROW_SIZE; row++)
@@ -203,6 +207,7 @@ int main(void)
         }
     }
     timer_cpu.offTimer(CPU);
+#endif
 
     // device result
     float *nsh_deviceC = new float[MAT_SIZE_C];
@@ -219,12 +224,13 @@ int main(void)
 
 #endif
 
+#ifdef CPU_ON
     printf("--------------------CPU MULTIPLICATION TOP--------------------\n");
     timer_cpu.printTimer();
-
     // check the results
     bool isCorrect = true;
     printf("--------------------CPU MULTIPLICATION BOT--------------------\n");
+#endif
 
 #ifdef MAT_MUL_SH
     // Copy input matrices : H -> D
@@ -300,6 +306,7 @@ int main(void)
     cudaMemcpy(nsh_deviceC, nsh_dC, sizeof(float) * MAT_SIZE_C, cudaMemcpyDeviceToHost);
     timer_nsh.offTimer(NSH_GPU2CPU);
 
+#ifdef CPU_ON
     float *nsh_pHostC = &hostC[0];
     float *nsh_pDeviceC = &nsh_deviceC[0];
     for (int i = 0; i < MAT_SIZE_C; i++)
@@ -315,6 +322,7 @@ int main(void)
         printf("NOT SHARED Result is correct!\n");
     else
         printf("NOT SHARED Result is not correct!!!!!!\n");
+#endif
 
     printf("--------------------GPU_NSH MULTIPLICATION TOP--------------------\n");
     timer_nsh.printTimer();
